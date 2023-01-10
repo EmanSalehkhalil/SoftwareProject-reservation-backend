@@ -4,11 +4,16 @@ const express = require('express');
 const app = express();
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const { v4 } = require('uuid');
-const db = require('../connectors/postgres');
+var cors = require('cors');
+const mongoose = require("mongoose");
+app.use(cors({ origin : '*'}))
+// const db = require('../connectors/postgres');
 const { sendKafkaMessage } = require('../connectors/kafka');
 const { validateTicketReservationDto } = require('../validation/reservation');
 const messagesType = require('../constants/messages');
 const { startKafkaProducer } = require('../connectors/kafka');
+const Reservation = require('../models/Reservation');
+const rateLimit = require('express-rate-limit');
 
 // Config setup to parse JSON payloads from HTTP POST request body
 app.use(express.json());
@@ -23,6 +28,7 @@ app.get('/api/health', async (req, res) => {
 // HTTP endpoint to create new user
 app.post('/api/reservation', async (req, res) => {
   try {
+    console.log(req.body);
     // validate payload before proceeding with reservations
     const validationError = validateTicketReservationDto(req.body);
     if (validationError) {
@@ -83,7 +89,8 @@ app.post('/api/reservation', async (req, res) => {
       quantity: req.body.tickets.quantity,
       price: req.body.tickets.price,
     };
-    await db('reservations').insert(ticketReservation);
+    // await db('reservations').insert(ticketReservation);
+    const docs = await Reservation.create(ticketReservation);
 
     // Return success response to client
     return res.json({
@@ -100,8 +107,28 @@ app.use((req, res, next) => {
   return res.status(404).send();
 });
 
-// Create HTTP Server and Listen for Requests
-app.listen(3000, async (req, res) => {
-  // Start Kafka Producer
-  await startKafkaProducer();
+const rateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 24 hrs in milliseconds
+  max: 1000,
+  message: 'You have exceeded the 100 requests in 24 hrs limit!',
+  standardHeaders: true,
+  legacyHeaders: false,
 });
+app.use(rateLimit);
+
+const mongooseOptions = {
+  useNewUrlParser: true,
+  useUnifiedTopology: true
+}
+const handleServerStartup = () => {
+  app.listen(3001, () => console.log(`Server listening on port 3001`))
+}
+async function main() {
+  await mongoose.set('strictQuery', true)
+  await mongoose.connect('mongodb+srv://Eman:12341234@ticketsystem.kaum5yg.mongodb.net/?retryWrites=true&w=majority', mongooseOptions, handleServerStartup)
+  await startKafkaProducer();
+  }
+
+module.exports = app;    
+
+main()
